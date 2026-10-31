@@ -2095,6 +2095,24 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
             }
         }
 
+        private void RestoreCache<TKey>(ConcurrentDictionary<TKey, AniDbWeightedCacheEntry> target, Dictionary<TKey, AniDbWeightedCacheEntry>? source)
+            where TKey : notnull
+        {
+            if (source == null)
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            foreach (var kvp in source)
+            {
+                if (now - kvp.Value.CachedAt < PersistentCacheMaxAge)
+                {
+                    target[kvp.Key] = kvp.Value;
+                }
+            }
+        }
+
         private void RestoreCache<TKey, TValue>(ConcurrentDictionary<TKey, AniListCacheEntry<TValue>> target, Dictionary<TKey, AniListCacheEntry<TValue>>? source)
             where TKey : notnull
         {
