@@ -186,6 +186,13 @@
                         <input id="chkAniDbRateLimit" name="chkAniDbRateLimit" type="number" is="emby-input" min="0" />
                         <div class="fieldDescription">This will prevent IP bans for requesting data too quickly.</div>
                     </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="chkEnableAniDbTags" name="chkEnableAniDbTags" type="checkbox" is="emby-checkbox" />
+                            <span>Import AniDB Tags</span>
+                        </label>
+                        <div class="fieldDescription">Uncheck to take no tags from AniDB. Independent of genres: a library can have AniDB's tags without its genres, or the other way round.</div>
+                    </div>
 
                     <h2>Exclusions</h2>
                     <div class="inputContainer animeMultiSourceTextarea">
@@ -281,6 +288,9 @@
                         // Limits
                         document.getElementById('chkAniDbRateLimit').value = config.AniDbRateLimit;
 
+                        // AniDB tags
+                        document.getElementById('chkEnableAniDbTags').checked = config.EnableAniDbTags !== false;
+
                         // AnimeSchedule.net
                         document.getElementById('animeScheduleApiKey').value = config.AnimeScheduleApiKey || '';
                         document.getElementById('animeScheduleMode').value = config.AnimeScheduleMode || 'Combined';
@@ -323,6 +333,9 @@
 
                         // Limits
                         config.AniDbRateLimit = document.getElementById('chkAniDbRateLimit').value;
+
+                        // AniDB tags
+                        config.EnableAniDbTags = document.getElementById('chkEnableAniDbTags').checked;
 
                         // AnimeSchedule.net
                         config.AnimeScheduleApiKey = document.getElementById('animeScheduleApiKey').value;
