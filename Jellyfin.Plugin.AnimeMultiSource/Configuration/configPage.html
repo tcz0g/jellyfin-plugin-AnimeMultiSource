@@ -193,6 +193,23 @@
                         </label>
                         <div class="fieldDescription">Uncheck to take no tags from AniDB. Independent of genres: a library can have AniDB's tags without its genres, or the other way round.</div>
                     </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="chkMinimumTagWeight">Minimum Tag Weight</label>
+                        <input id="chkMinimumTagWeight" name="chkMinimumTagWeight" type="number" is="emby-input" min="0" />
+                        <div class="fieldDescription">AniDB weights every tag by how much of the show it describes. Tags below this weight are dropped. 400 is where AniDB itself stops treating a tag as descriptive; raise it to keep only what characterises the show.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="chkInfoboxTagsOnly" name="chkInfoboxTagsOnly" type="checkbox" is="emby-checkbox" />
+                            <span>Infobox Tags Only</span>
+                        </label>
+                        <div class="fieldDescription">AniDB marks the handful of tags it shows in the infobox on an anime's page. If checked, only those are imported, leaving out the tags that describe the setting, the cast or a production detail.</div>
+                    </div>
+                    <div class="inputContainer animeMultiSourceTextarea">
+                        <label class="inputLabel inputLabelUnfocused" for="txtTagBlacklist">Tag Blacklist</label>
+                        <textarea id="txtTagBlacklist" name="txtTagBlacklist" is="emby-textarea" class="emby-input emby-textarea" rows="4"></textarea>
+                        <div class="fieldDescription">Tag names never to import, one per line or separated by commas. Matched whole and without regard to case, against the name AniDB uses.</div>
+                    </div>
 
                     <h2>Exclusions</h2>
                     <div class="inputContainer animeMultiSourceTextarea">
@@ -290,6 +307,9 @@
 
                         // AniDB tags
                         document.getElementById('chkEnableAniDbTags').checked = config.EnableAniDbTags !== false;
+                        document.getElementById('chkMinimumTagWeight').value = config.MinimumTagWeight || 400;
+                        document.getElementById('chkInfoboxTagsOnly').checked = config.InfoboxTagsOnly === true;
+                        document.getElementById('txtTagBlacklist').value = config.TagBlacklist || '';
 
                         // AnimeSchedule.net
                         document.getElementById('animeScheduleApiKey').value = config.AnimeScheduleApiKey || '';
@@ -336,6 +356,9 @@
 
                         // AniDB tags
                         config.EnableAniDbTags = document.getElementById('chkEnableAniDbTags').checked;
+                        config.MinimumTagWeight = parseInt(document.getElementById('chkMinimumTagWeight').value || '400');
+                        config.InfoboxTagsOnly = document.getElementById('chkInfoboxTagsOnly').checked;
+                        config.TagBlacklist = document.getElementById('txtTagBlacklist').value;
 
                         // AnimeSchedule.net
                         config.AnimeScheduleApiKey = document.getElementById('animeScheduleApiKey').value;

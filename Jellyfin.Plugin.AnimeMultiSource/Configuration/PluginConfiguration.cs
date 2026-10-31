@@ -181,6 +181,27 @@ Action";
         public string AniDbClientName { get; set; }
         public string AniDbClientVersion { get; set; }
 
+        // AniDB tag filtering settings
+        /// <summary>
+        /// Gets or sets the weight a tag needs before it is imported. AniDB weights a tag by how
+        /// much of the show it describes, so raising this keeps only the tags that characterise
+        /// it. Default 400 is where AniDB itself stops treating a tag as descriptive.
+        /// </summary>
+        public int MinimumTagWeight { get; set; } = 400;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether only the tags AniDB shows in the infobox on the
+        /// anime's page are imported. Those are the ones AniDB considers to describe the show
+        /// rather than its setting or its cast.
+        /// </summary>
+        public bool InfoboxTagsOnly { get; set; }
+
+        /// <summary>
+        /// Gets or sets the tag names never to import, one per line or separated by commas.
+        /// Matched whole and without regard to case.
+        /// </summary>
+        public string TagBlacklist { get; set; } = string.Empty;
+
         // Season settings
         public SeasonTitleFormatType SeasonTitleFormat { get; set; }
         public SeasonOverviewSourceType SeasonOverviewSource { get; set; }

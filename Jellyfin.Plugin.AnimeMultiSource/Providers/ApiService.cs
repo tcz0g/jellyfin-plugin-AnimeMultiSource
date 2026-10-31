@@ -25,6 +25,7 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
         private readonly TagFilterService _tagFilterService;
         private DateTime _lastAniDbRequest = DateTime.MinValue;
         private static readonly ConcurrentDictionary<long, AniDbCacheEntry> _aniDbCache = new();
+        private static readonly ConcurrentDictionary<long, AniDbWeightedCacheEntry> _aniDbWeightedTagsCache = new();
         private static readonly TimeSpan AniDbCacheDuration = TimeSpan.FromDays(5);
         // AniDB often has no tags yet for a newly released show; that empty answer must not hide the tags for days once they appear.
         private static readonly TimeSpan AniDbEmptyTagsCacheDuration = TimeSpan.FromHours(6);
@@ -1112,6 +1113,150 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
             return data.MainTitle;
         }
 
+        // Returns weighted tags with infobox status for filtering by minimum weight and blacklist.
+        public async Task<List<TagInfo>> GetAniDbWeightedTagsAsync(
+            long anidbId,
+            string clientName,
+            string clientVersion,
+            int rateLimitMs = 2000)
+        {
+            var now = DateTimeOffset.UtcNow;
+
+            EnsurePersistentCacheLoaded();
+
+            // Check cache for weighted tags - stored separately since they include weight data
+            if (_aniDbWeightedTagsCache.TryGetValue(anidbId, out var cachedWeighted) &&
+                now - cachedWeighted.CachedAt < AniDbCacheDuration)
+            {
+                _logger.LogInformation("AniDB weighted tags cache hit for ID {AniDbId} (age: {Age:F1} minutes)", anidbId, (now - cachedWeighted.CachedAt).TotalMinutes);
+                return new List<TagInfo>(cachedWeighted.Tags);
+            }
+
+            if (IsAniDbTemporarilyBanned(out var remainingBan, out var banReason))
+            {
+                _logger.LogWarning("AniDB requests paused until {BanUntil:u} (remaining {Remaining:F1} minutes) because {Reason}", now + remainingBan, remainingBan.TotalMinutes, banReason);
+                return new List<TagInfo>();
+            }
+
+            _aniDbWeightedTagsCache.TryRemove(anidbId, out _);
+
+            var tags = new List<TagInfo>();
+
+            try
+            {
+                var rateContext = GetAniDbRateLimitContext(rateLimitMs);
+                var timeSinceLastRequest = DateTime.UtcNow - _lastAniDbRequest;
+                var waitMs = Math.Max(0, rateContext.EffectiveRateLimitMs - (int)timeSinceLastRequest.TotalMilliseconds);
+                if (waitMs > 0)
+                {
+                    _logger.LogInformation("AniDB rate limiting: waiting {WaitMs} ms before request #{RequestNumber} (mode: {Mode}, date: {Date})",
+                        waitMs,
+                        rateContext.RequestNumber,
+                        rateContext.IsSlowMode ? "slow" : "fast",
+                        rateContext.Date.ToString("yyyy-MM-dd"));
+                    await Task.Delay(waitMs);
+                }
+
+                // AniDB HTTP API URL
+                var url = $"http://api.anidb.net:9001/httpapi?request=anime&client={clientName}&clientver={clientVersion}&protover=1&aid={anidbId}";
+
+                _logger.LogDebug("Fetching weighted AniDB tags from: {Url}", url);
+
+                var response = await _httpClient.GetAsync(url);
+                _lastAniDbRequest = DateTime.UtcNow;
+
+                if (IsAniDbRateLimited(response))
+                {
+                    var backoff = GetRetryAfterDelay(response, AniDbBanBackoff);
+                    SetAniDbBan($"AniDB rate-limit response ({(int)response.StatusCode} {response.StatusCode})", backoff);
+                    return tags;
+                }
+
+                if (response.IsSuccessStatusCode)
+                {
+                    string xmlContent;
+
+                    try
+                    {
+                        xmlContent = await response.Content.ReadAsStringAsync();
+                    }
+                    catch
+                    {
+                        byte[] responseData = await response.Content.ReadAsByteArrayAsync();
+
+                        if (IsGzipped(responseData))
+                        {
+                            xmlContent = DecompressGzip(responseData);
+                        }
+                        else
+                        {
+                            xmlContent = System.Text.Encoding.UTF8.GetString(responseData);
+                        }
+                    }
+
+                    _logger.LogDebug("Final AniDB response length: {Length} chars", xmlContent.Length);
+
+                    if (ContainsAniDbBanMessage(xmlContent))
+                    {
+                        var snippet = xmlContent.Substring(0, Math.Min(xmlContent.Length, 160));
+                        _logger.LogWarning("AniDB response looked like a ban/limit notice. First 160 chars: {Snippet}", snippet);
+                        SetAniDbBan("AniDB response contained ban/limit notice", AniDbBanBackoff);
+                        return tags;
+                    }
+
+                    // Parse XML response to get weighted tags
+                    var animeData = ParseAniDbXml(xmlContent);
+
+                    if (animeData?.Tags?.TagList != null)
+                    {
+                        var allWeightedTags = animeData.Tags.TagList
+                            .Where(tag => !string.IsNullOrEmpty(tag.Name))
+                            .Select(tag => new TagInfo
+                            {
+                                Name = tag.Name!,
+                                Weight = tag.Weight,
+                                IsInfobox = tag.Description != null // infobox tags have descriptions in XML
+                            })
+                            .DistinctBy(t => t.Name)
+                            .ToList();
+
+                        _logger.LogDebug("Found {Count} weighted AniDB tags for ID {AniDbId}", allWeightedTags.Count, anidbId);
+
+                        // Cache the weighted tags
+                        var cacheEntry = new AniDbWeightedCacheEntry(DateTimeOffset.UtcNow, new List<TagInfo>(allWeightedTags));
+                        _aniDbWeightedTagsCache[anidbId] = cacheEntry;
+                        _logger.LogInformation("AniDB weighted tags cache stored for ID {AniDbId} with {TagCount} tags", anidbId, allWeightedTags.Count);
+                        PersistCachesToDiskSafe();
+
+                        return allWeightedTags;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("No tags found in AniDB response for ID {AniDbId}", anidbId);
+                        var cacheEntry = new AniDbWeightedCacheEntry(DateTimeOffset.UtcNow, new List<TagInfo>());
+                        _aniDbWeightedTagsCache[anidbId] = cacheEntry;
+                        PersistCachesToDiskSafe();
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("AniDB API returned status code: {StatusCode}", response.StatusCode);
+
+                    if (IsAniDbRateLimited(response))
+                    {
+                        var backoff = GetRetryAfterDelay(response, AniDbBanBackoff);
+                        SetAniDbBan("AniDB non-success rate-limit response", backoff);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching weighted AniDB tags for ID {AniDbId}", anidbId);
+            }
+
+            return tags;
+        }
+
         private async Task<(List<string> Tags, string? MainTitle)> GetAniDbDataAsync(
             long anidbId,
             string clientName,
@@ -1865,6 +2010,7 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
                 }
 
                 RestoreCache(_aniDbCache, snapshot.AniDb);
+                RestoreCache(_aniDbWeightedTagsCache, snapshot.AniDbWeightedTags);
                 RestoreCache(_aniListMediaCache, snapshot.AniListMedia);
                 RestoreCache(_aniListSeasonCache, snapshot.AniListSeason);
                 RestoreCache(_aniListRootCache, snapshot.AniListRoot);
@@ -1898,6 +2044,9 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
             var snapshot = new PersistentCacheSnapshot
             {
                 AniDb = _aniDbCache
+                    .Where(kvp => now - kvp.Value.CachedAt < PersistentCacheMaxAge)
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+                AniDbWeightedTags = _aniDbWeightedTagsCache
                     .Where(kvp => now - kvp.Value.CachedAt < PersistentCacheMaxAge)
                     .ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
                 AniListMedia = _aniListMediaCache
@@ -2010,6 +2159,7 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
         private sealed class PersistentCacheSnapshot
         {
             public Dictionary<long, AniDbCacheEntry> AniDb { get; set; } = new();
+            public Dictionary<long, AniDbWeightedCacheEntry> AniDbWeightedTags { get; set; } = new();
             public Dictionary<int, AniListCacheEntry<AniListMedia>> AniListMedia { get; set; } = new();
             public Dictionary<int, AniListCacheEntry<AniListSeasonDetail>> AniListSeason { get; set; } = new();
             public Dictionary<int, AniListCacheEntry<int>> AniListRoot { get; set; } = new();
@@ -2017,6 +2167,7 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
         }
 
         private sealed record AniDbCacheEntry(DateTimeOffset CachedAt, List<string> Tags, string? MainTitle = null);
+        private sealed record AniDbWeightedCacheEntry(DateTimeOffset CachedAt, List<TagInfo> Tags);
         private sealed record AniDbRateLimitContext(int EffectiveRateLimitMs, int RequestNumber, bool IsSlowMode, DateTime Date);
         private sealed record AniListCacheEntry<T>(DateTimeOffset CachedAt, T Data);
         public sealed class AniListSeasonDetail

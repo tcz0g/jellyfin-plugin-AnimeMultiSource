@@ -279,15 +279,21 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
         {
             try
             {
-                var tags = await _apiService.GetAniDbTagsAsync(aniDbId, config.AniDbClientName, config.AniDbClientVersion, config.AniDbRateLimit);
-                if (tags == null || tags.Count == 0)
+                // Fetch weighted tags with infobox status
+                var weightedTags = await _apiService.GetAniDbWeightedTagsAsync(aniDbId, config.AniDbClientName, config.AniDbClientVersion, config.AniDbRateLimit);
+                if (weightedTags == null || weightedTags.Count == 0)
                 {
                     return new List<string>();
                 }
 
-                var filtered = _tagFilterService.FilterTags(tags);
-                _tagFilterService.LogFilteredTags(_logger, tags, filtered);
-                return filtered;
+                // Apply tag filtering with config parameters
+                var filtered = _tagFilterService.FilterWeightedTags(
+                    weightedTags, 
+                    config.MinimumTagWeight, 
+                    config.InfoboxTagsOnly,
+                    config.TagBlacklist);
+
+                return filtered.Select(t => t.Name).ToList();
             }
             catch (Exception ex)
             {

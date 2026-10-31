@@ -5,6 +5,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.AnimeMultiSource.Providers
 {
+    public class TagInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Weight { get; set; }
+        public bool IsInfobox { get; set; }
+    }
+
     public class TagFilterService
     {
         private static readonly HashSet<string> ExcludedTagCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -85,6 +92,13 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
             "maintenance tags"
         };
 
+        private readonly HashSet<string> _blacklist;
+
+        public TagFilterService(string tagBlacklist = "")
+        {
+            _blacklist = GetTagBlacklist(tagBlacklist);
+        }
+
         public List<string> FilterTags(List<string> tags)
         {
             if (tags == null || !tags.Any())
@@ -96,6 +110,26 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
                 .Select(tag => tag.Trim())
                 .Distinct()
                 .ToList();
+        }
+
+        public List<TagInfo> FilterWeightedTags(IEnumerable<TagInfo> tags, int minimumTagWeight, bool infoboxTagsOnly, string tagBlacklist = "")
+        {
+            if (tags == null || !tags.Any())
+                return new List<TagInfo>();
+
+            var blacklist = GetTagBlacklist(tagBlacklist);
+
+            var filtered = tags
+                .Where(tag => !string.IsNullOrWhiteSpace(tag.Name))
+                .Where(tag => !IsExcluded(tag.Name))
+                .Where(tag => tag.Weight >= minimumTagWeight)
+                .Where(tag => infoboxTagsOnly ? tag.IsInfobox : true)
+                .Where(tag => !blacklist.Contains(tag.Name))
+                .Select(tag => new TagInfo { Name = tag.Name.Trim(), Weight = tag.Weight, IsInfobox = tag.IsInfobox })
+                .DistinctBy(t => t.Name)
+                .ToList();
+
+            return filtered;
         }
 
         private bool IsExcluded(string tag)
@@ -128,6 +162,18 @@ namespace Jellyfin.Plugin.AnimeMultiSource.Providers
             }
 
             logger.LogDebug("Kept {KeptCount} tags after filtering", filteredTags.Count);
+        }
+
+        private static HashSet<string> GetTagBlacklist(string value)
+        {
+            var blacklist = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var name in value.Split([',', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                blacklist.Add(name);
+            }
+
+            return blacklist;
         }
     }
 }
